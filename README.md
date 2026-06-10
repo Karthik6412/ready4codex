@@ -55,6 +55,8 @@ The CLI prints a compact summary and saves a full Markdown report containing:
 - Suggested agent plan
 - Codex-ready prompt
 
+See [examples/](examples/) for a sample terminal output and generated Markdown report.
+
 ## MVP Scope
 
 This MVP focuses on producing a working readiness report first. OpenAI-backed agents are used when configured, with deterministic fallback kept intentionally small and local.

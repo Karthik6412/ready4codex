@@ -1,0 +1,18 @@
+$ python3 main.py \
+  --repo https://github.com/Karthik6412/ready4codex \
+  --feature "Add notifications when users join projects"
+
+                               READY4CODEX REPORT
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Field           ┃ Value                                                      ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Repository      │ Karthik6412/ready4codex                                    │
+│ Feature         │ Add notifications when users join projects                 │
+│ ARS             │ 30 / 100                                                   │
+│ Verdict         │ NOT READY                                                  │
+│ PM Agent        │ OpenAI mode                                                │
+│ Engineer Agent  │ OpenAI mode                                                │
+│ Synthesis Agent │ OpenAI mode                                                │
+│ Saved Report    │ reports/20260610-231959-karthik6412-ready4codex-add-      │
+│                 │ notifications-when-users-join-projects.md                 │
+└─────────────────┴────────────────────────────────────────────────────────────┘
