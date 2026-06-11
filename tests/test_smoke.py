@@ -14,6 +14,7 @@ from agents.synthesis_agent import run_synthesis_agent
 from github_repo import RepoFile, RepoSnapshot
 from repo_analysis import analyze_repository
 from reporting import save_report
+from sanitizer import sanitize_engineer_output, sanitize_pm_output
 
 
 def _fallback_report_for(feature: str):
@@ -52,6 +53,26 @@ def _fallback_report_for(feature: str):
             os.environ["OPENAI_API_KEY"] = original_api_key
 
     return synthesis_run.report
+
+
+def _analysis_for(feature: str):
+    snapshot = RepoSnapshot(
+        full_name="demo/app",
+        default_branch="main",
+        description="Demo dashboard app",
+        html_url="https://github.com/demo/app",
+        tree_paths=[
+            "README.md",
+            "app/dashboard.py",
+            "requirements.txt",
+        ],
+        files=[
+            RepoFile("README.md", "Dashboard app"),
+            RepoFile("requirements.txt", "streamlit\n"),
+            RepoFile("app/dashboard.py", "phase_slider = (0, 90)"),
+        ],
+    )
+    return analyze_repository(snapshot, feature)
 
 
 def test_smoke_report_generation() -> None:
@@ -137,7 +158,56 @@ def test_feature_specific_scoring_examples() -> None:
     assert ml_report.verdict == "NOT READY"
 
 
+def test_sanitizer_removes_ungrounded_openai_concerns() -> None:
+    feature = (
+        "Add a reset button to the dashboard that clears all filters and returns "
+        "the phase slider to default position 0-90"
+    )
+    analysis = _analysis_for(feature)
+
+    pm_sanitized = sanitize_pm_output(
+        {
+            "must_clarify": [
+                "What is the default state of filters?",
+                "How should unsaved changes be handled?",
+                "What visual feedback should appear after reset?",
+                "Which user roles can use the reset button?",
+                "What is the design placement of the button?",
+            ],
+            "should_clarify": [],
+            "open_questions": [],
+        },
+        feature,
+        analysis,
+    )
+    assert pm_sanitized.output["must_clarify"] == []
+    assert pm_sanitized.removed
+
+    engineer_sanitized = sanitize_engineer_output(
+        {
+            "risks": [
+                "Unsaved changes may be lost.",
+                "Visual feedback is undefined.",
+                "User roles and access permissions are unclear.",
+                "Design placement may conflict with the layout.",
+            ],
+            "missing_infrastructure": [],
+            "open_questions": [],
+        },
+        feature,
+        analysis,
+    )
+    assert engineer_sanitized.output["risks"] == []
+
+    removed_text = " ".join(
+        pm_sanitized.removed + engineer_sanitized.removed
+    ).lower()
+    for term in ("unsaved", "visual feedback", "user roles", "design placement"):
+        assert term in removed_text
+
+
 if __name__ == "__main__":
     test_smoke_report_generation()
     test_feature_specific_scoring_examples()
+    test_sanitizer_removes_ungrounded_openai_concerns()
     print("smoke test passed")

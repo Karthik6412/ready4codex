@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from openai_support import OpenAIUnavailable, call_openai_json, string_array_schema
 from repo_analysis import RepositoryAnalysis
+from sanitizer import sanitize_pm_output
 
 
 PM_SYSTEM_PROMPT = """You are a senior product manager reviewing a feature request.
@@ -39,6 +40,7 @@ class AgentResult:
     output: dict[str, list[str]]
     mode: str
     error: str | None = None
+    sanitizer_removed: tuple[str, ...] = ()
 
 
 async def run_pm_agent(feature: str, analysis: RepositoryAnalysis) -> AgentResult:
@@ -55,16 +57,24 @@ async def run_pm_agent(feature: str, analysis: RepositoryAnalysis) -> AgentResul
                 ["must_clarify", "should_clarify", "open_questions"]
             ),
         )
-        return AgentResult(output=_normalize_pm_result(result, feature, analysis), mode="OpenAI mode")
+        sanitized = sanitize_pm_output(result, feature, analysis)
+        return AgentResult(
+            output=sanitized.output,
+            mode="OpenAI mode",
+            sanitizer_removed=sanitized.removed,
+        )
     except Exception as exc:
         if not isinstance(exc, OpenAIUnavailable):
             error = str(exc)
         else:
             error = str(exc)
+        fallback_output = await _run_pm_fallback(feature, analysis)
+        sanitized = sanitize_pm_output(fallback_output, feature, analysis)
         return AgentResult(
-            output=await _run_pm_fallback(feature, analysis),
+            output=sanitized.output,
             mode="fallback mode",
             error=error,
+            sanitizer_removed=sanitized.removed,
         )
 
 

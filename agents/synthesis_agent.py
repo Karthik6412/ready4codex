@@ -7,6 +7,7 @@ from pathlib import Path
 from github_repo import RepoSnapshot
 from openai_support import OpenAIUnavailable, call_openai_json
 from repo_analysis import RepositoryAnalysis
+from sanitizer import sanitize_report_items
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class SynthesisResult:
     report: ReadinessReport
     mode: str
     error: str | None = None
+    sanitizer_removed: tuple[str, ...] = ()
 
 
 async def run_synthesis_agent(
@@ -151,7 +153,7 @@ Ready4Codex answers: "Can an engineer or coding agent reasonably begin implement
 Context applicability check:
 - If the repo appears to be a simple dashboard/data visualization app with no user accounts, database writes, persistence/save workflow, or editing workflow, do not treat unsaved changes, confirmation dialogs, save/discard behavior, or data persistence behavior as blockers.
 - Animations, alerts, visual feedback, accessibility, disabled states, and confirmation dialogs are non-blocking UX polish unless explicitly requested.
-- If implementation_complexity is low, new_infrastructure_required is empty, must_clarify is empty, and there are no blocking engineering risks, the ARS must be at least 75.
+- If implementation_complexity is low, new_infrastructure_required is empty, must_clarify is empty, and there are no blocking engineering risks, the ARS must be at least 80.
 Return JSON only. Follow the skill output order. Do not recommend implementation when critical ambiguities remain."""
 
 
@@ -310,6 +312,12 @@ def _report_from_openai_result(
     architecture_fit = _coerce_dict(result.get("architecture_fit")) or analysis.architecture_fit
     product_gaps = _coerce_string_list(result.get("product_gaps")) or fallback.product_gaps
     engineering_risks = _coerce_string_list(result.get("engineering_risks")) or fallback.engineering_risks
+    product_gaps, engineering_risks, sanitizer_removed = sanitize_report_items(
+        product_gaps,
+        engineering_risks,
+        feature,
+        analysis,
+    )
     testability_analysis = (
         _coerce_dict(result.get("testability_analysis")) or fallback.testability_analysis
     )
@@ -326,7 +334,7 @@ def _report_from_openai_result(
         {"risks": blocking_engineering_risks, "missing_infrastructure": []},
         blocking_engineering_risks,
     ):
-        score = max(score, 75)
+        score = max(score, 80)
     verdict = calculate_verdict(
         score,
         {"must_clarify": blocking_product_gaps},
@@ -441,7 +449,7 @@ def calculate_score(
         engineer_result,
         scored_risks,
     ):
-        score = max(score, 75)
+        score = max(score, 80)
     return max(0, min(100, score))
 
 

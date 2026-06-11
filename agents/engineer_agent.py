@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from openai_support import OpenAIUnavailable, call_openai_json, string_array_schema
 from repo_analysis import RepositoryAnalysis
+from sanitizer import sanitize_engineer_output
 
 
 ENGINEER_SYSTEM_PROMPT = """You are a staff software engineer reviewing a feature request against an existing codebase.
@@ -34,6 +35,7 @@ class AgentResult:
     output: dict[str, list[str]]
     mode: str
     error: str | None = None
+    sanitizer_removed: tuple[str, ...] = ()
 
 
 async def run_engineer_agent(feature: str, analysis: RepositoryAnalysis) -> AgentResult:
@@ -50,19 +52,24 @@ async def run_engineer_agent(feature: str, analysis: RepositoryAnalysis) -> Agen
                 ["risks", "missing_infrastructure", "open_questions"]
             ),
         )
+        sanitized = sanitize_engineer_output(result, feature, analysis)
         return AgentResult(
-            output=_normalize_engineer_result(result, feature, analysis),
+            output=sanitized.output,
             mode="OpenAI mode",
+            sanitizer_removed=sanitized.removed,
         )
     except Exception as exc:
         if not isinstance(exc, OpenAIUnavailable):
             error = str(exc)
         else:
             error = str(exc)
+        fallback_output = await _run_engineer_fallback(feature, analysis)
+        sanitized = sanitize_engineer_output(fallback_output, feature, analysis)
         return AgentResult(
-            output=await _run_engineer_fallback(feature, analysis),
+            output=sanitized.output,
             mode="fallback mode",
             error=error,
+            sanitizer_removed=sanitized.removed,
         )
 
 
