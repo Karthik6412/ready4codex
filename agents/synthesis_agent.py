@@ -109,7 +109,6 @@ def synthesize_report(
     engineering_risks = (
         feature_engineer_result.get("risks", [])
         + feature_engineer_result.get("missing_infrastructure", [])
-        + engineer_result.get("open_questions", [])
     )
 
     return ReadinessReport(
@@ -142,6 +141,8 @@ Separate feature readiness from repo health:
 - FEATURE READINESS affects the ARS score: must-clarify items specific to this feature, engineering risks that block this feature, missing infrastructure required for this feature, and poor testability of this feature's requirements.
 - REPO HEALTH appears only in repo_health_warnings and must not reduce the score: general missing tests, no CI/CD, broad architectural gaps unrelated to the feature, and repository hygiene issues.
 A simple, well-scoped feature on an imperfect repo should still score 70-80+ when the request itself is clear.
+Distinguish blocking issues from non-blocking improvements. Readiness scoring should primarily reflect implementation readiness, not perfection.
+Ready4Codex answers: "Can an engineer or coding agent reasonably begin implementation?" not "Have all possible future questions been answered?"
 Return JSON only. Follow the skill output order. Do not recommend implementation when critical ambiguities remain."""
 
 
@@ -324,6 +325,7 @@ def analyze_testability(feature: str, pm_result: dict[str, list[str]]) -> dict[s
     improved_criteria: list[str] = []
     score = 100
     feature_lower = feature.lower()
+    feature_tokens = _tokens(feature)
 
     vague_terms = {
         "easy": "Define the exact action count, screen, or workflow completion criteria.",
@@ -357,10 +359,10 @@ def analyze_testability(feature: str, pm_result: dict[str, list[str]]) -> dict[s
         improved_criteria.append(
             "Given the relevant starting state, when the user performs the action, then the expected result is observable and testable."
         )
-        score -= 25
+        score -= 10 if _has_objective_primary_behavior(feature_tokens) else 25
 
     if pm_result.get("must_clarify"):
-        score -= min(30, len(pm_result["must_clarify"]) * 10)
+        score -= min(25, len(pm_result["must_clarify"]) * 8)
 
     return {
         "testability_score": max(0, score),
@@ -385,11 +387,19 @@ def calculate_score(
     score -= len(engineer_result.get("missing_infrastructure", [])) * 12
     if int(testability.get("testability_score", 0)) < 70:
         score -= 15
+    elif int(testability.get("testability_score", 0)) < 85:
+        score -= 5
     if any(
         "no clearly impacted modules" in risk.lower()
         for risk in engineer_result.get("risks", [])
     ):
         score = min(score, 85)
+    if (
+        not engineer_result.get("risks")
+        and not engineer_result.get("missing_infrastructure")
+        and any("module should own" in question.lower() for question in engineer_result.get("open_questions", []))
+    ):
+        score = min(score, 90)
     return max(0, min(100, score))
 
 
@@ -498,6 +508,37 @@ def _format_list(items: list[str]) -> str:
     if not items:
         return "- None"
     return "\n".join(f"- {item}" for item in items)
+
+
+def _tokens(value: str) -> set[str]:
+    return set(re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", value.lower()))
+
+
+def _has_objective_primary_behavior(tokens: set[str]) -> bool:
+    objective_terms = {
+        "button",
+        "clear",
+        "reset",
+        "display",
+        "show",
+        "hide",
+        "sort",
+        "filter",
+        "filters",
+        "export",
+        "download",
+        "upload",
+        "save",
+        "delete",
+        "remove",
+        "create",
+        "update",
+        "page",
+        "screen",
+        "form",
+        "field",
+    }
+    return bool(tokens.intersection(objective_terms))
 
 
 def _coerce_score(value: object, fallback: int) -> int:

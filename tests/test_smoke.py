@@ -111,7 +111,7 @@ def test_feature_specific_scoring_examples() -> None:
     reset_report = _fallback_report_for(
         "Add a reset button that clears selected filters when clicked"
     )
-    assert 75 <= reset_report.score <= 85
+    assert 85 <= reset_report.score <= 95
     assert reset_report.verdict == "READY"
     assert reset_report.repo_health_warnings
     assert not any("test framework" in risk.lower() for risk in reset_report.engineering_risks)
@@ -121,7 +121,7 @@ def test_feature_specific_scoring_examples() -> None:
     assert intensity_report.verdict == "NEEDS WORK"
 
     ml_report = _fallback_report_for("Add ML predictions")
-    assert 20 <= ml_report.score <= 30
+    assert 25 <= ml_report.score <= 40
     assert ml_report.verdict == "NOT READY"
 
 

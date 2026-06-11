@@ -17,6 +17,12 @@ Identify:
 * undefined user flows
 * acceptance criteria gaps
 
+Before flagging a gap, verify the information is not already present in the feature request.
+Do not ask for information that is explicitly specified.
+Reserve must_clarify only for blocking ambiguities that prevent implementation from starting.
+Use should_clarify for edge cases, preferences, reasonable defaults, and non-blocking product polish.
+Ready4Codex answers: "Can an engineer or coding agent reasonably begin implementation?" not "Have all possible future questions been answered?"
+
 Be specific and concise.
 
 Return JSON only."""
@@ -66,21 +72,24 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
     should_clarify: list[str] = []
     open_questions: list[str] = []
 
-    if len(tokens) < 5:
+    if _is_too_vague_to_start(tokens):
         must_clarify.append("Feature request is too short to infer scope or acceptance criteria.")
 
-    if not _mentions_actor(feature_lower) and not _has_implied_ui_actor(tokens):
-        must_clarify.append("Primary user or actor is not clearly defined.")
+    if not _mentions_actor(feature_lower) and not _has_implied_actor(tokens):
+        should_clarify.append("Primary user or actor should be confirmed.")
 
     if not _mentions_success_condition(feature_lower):
-        must_clarify.append("Acceptance criteria are not stated in measurable terms.")
+        if _has_objective_behavior(tokens):
+            should_clarify.append("Acceptance criteria could be more explicit, but the primary behavior is inferable.")
+        else:
+            must_clarify.append("Acceptance criteria are not stated in measurable terms.")
 
     if any(word in tokens for word in {"notification", "notifications", "email", "message"}):
         if not any(word in tokens for word in {"email", "sms", "push", "in-app", "webhook"}):
-            must_clarify.append("Notification delivery channel is not specified.")
-        if not any(word in tokens for word in {"receive", "recipient", "admin", "owner", "member", "user"}):
+            should_clarify.append("Notification delivery channel should be confirmed.")
+        if not any(word in tokens for word in {"receive", "recipient", "admin", "owner", "member", "user", "users"}):
             should_clarify.append("Notification recipients should be explicitly defined.")
-        open_questions.append("Can users configure or disable these notifications?")
+        open_questions.append("Can users configure or disable these notifications later?")
 
     if any(word in tokens for word in {"permission", "role", "admin", "owner", "access"}):
         should_clarify.append("Role and permission rules need explicit allowed and denied cases.")
@@ -93,7 +102,7 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
 
     if any(word in tokens for word in {"ml", "prediction", "predictions", "model", "inference"}):
         must_clarify.append("Prediction target and expected output are not defined.")
-        should_clarify.append("Input data source for predictions should be defined.")
+        must_clarify.append("Input data source for predictions is not defined.")
         should_clarify.append("Model quality, freshness, or evaluation criteria should be defined.")
 
     if any(word in tokens for word in {"report", "dashboard", "analytics"}):
@@ -102,7 +111,7 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
     if analysis.repo_notes:
         should_clarify.extend(f"Repository context note: {note}" for note in analysis.repo_notes)
 
-    if not open_questions:
+    if not open_questions and not _has_objective_behavior(tokens):
         open_questions.append("What exact user-visible behavior confirms this feature is complete?")
 
     return {
@@ -130,12 +139,36 @@ def _tokens(value: str) -> set[str]:
     return set(re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", value))
 
 
+def _is_too_vague_to_start(tokens: set[str]) -> bool:
+    if len(tokens) >= 5:
+        return False
+    vague_actions = {"compare", "analyze", "improve", "optimize", "predict", "predictions"}
+    clear_small_features = {
+        "button",
+        "page",
+        "screen",
+        "field",
+        "filter",
+        "filters",
+        "toggle",
+        "reset",
+        "clear",
+    }
+    return bool(tokens.intersection(vague_actions)) and not bool(
+        tokens.intersection(clear_small_features)
+    )
+
+
 def _mentions_actor(value: str) -> bool:
     actors = ("user", "admin", "owner", "member", "customer", "developer", "team", "player")
     return any(actor in value for actor in actors)
 
 
-def _has_implied_ui_actor(tokens: set[str]) -> bool:
+def _has_implied_actor(tokens: set[str]) -> bool:
+    return _has_objective_behavior(tokens) or bool(tokens.intersection({"system", "api", "service"}))
+
+
+def _has_objective_behavior(tokens: set[str]) -> bool:
     ui_terms = {
         "button",
         "form",
@@ -147,6 +180,20 @@ def _has_implied_ui_actor(tokens: set[str]) -> bool:
         "modal",
         "menu",
         "dashboard",
+        "reset",
+        "clear",
+        "export",
+        "download",
+        "upload",
+        "save",
+        "delete",
+        "remove",
+        "display",
+        "show",
+        "hide",
+        "sort",
+        "filter",
+        "filters",
     }
     return bool(tokens.intersection(ui_terms))
 

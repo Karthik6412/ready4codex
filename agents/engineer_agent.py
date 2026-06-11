@@ -18,6 +18,11 @@ Identify:
 * missing implementation details
 * infrastructure gaps
 
+Only flag risks directly relevant to implementing the requested feature.
+Do not treat optional UX improvements, future scalability concerns, or hypothetical edge cases as blocking risks.
+Put non-blocking enhancement suggestions or follow-up considerations in open_questions, not risks.
+Do not include general repo health issues as implementation risks unless they directly block this feature.
+
 Return JSON only."""
 
 
@@ -69,21 +74,21 @@ async def _run_engineer_fallback(
     open_questions: list[str] = []
 
     if not impacted_modules:
-        risks.append("No clearly impacted modules were detected from the repository structure.")
+        open_questions.append("Which existing module should own this change?")
 
     if fit.get("implementation_complexity") == "high":
         risks.append("Feature appears to span many modules or infrastructure concerns.")
     elif fit.get("implementation_complexity") == "medium":
-        risks.append("Feature may require coordination across multiple modules or services.")
+        open_questions.append("Feature may require coordination across multiple modules or services.")
 
     if "tests" not in analysis.architecture_summary:
-        risks.append("Test framework or test directory was not confidently detected.")
+        open_questions.append("Test framework or test directory was not confidently detected.")
 
     if missing_infrastructure:
-        risks.append("Feature appears to require infrastructure that was not detected in the repo.")
+        open_questions.append("Feature appears to require infrastructure that was not detected in the repo.")
 
     if any(word in tokens for word in {"email", "notification", "notifications"}):
-        open_questions.append("What retry, failure, and idempotency behavior is required?")
+        open_questions.append("Retry, failure, and idempotency behavior can be defined after the delivery channel is chosen.")
 
     if any(word in tokens for word in {"migration", "database", "model", "schema"}):
         open_questions.append("What database migration and rollback expectations apply?")
