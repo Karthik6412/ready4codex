@@ -69,7 +69,7 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
     if len(tokens) < 5:
         must_clarify.append("Feature request is too short to infer scope or acceptance criteria.")
 
-    if not _mentions_actor(feature_lower):
+    if not _mentions_actor(feature_lower) and not _has_implied_ui_actor(tokens):
         must_clarify.append("Primary user or actor is not clearly defined.")
 
     if not _mentions_success_condition(feature_lower):
@@ -90,6 +90,11 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
 
     if any(word in tokens for word in {"payment", "billing", "subscription", "invoice"}):
         must_clarify.append("Payment states, failure handling, and business rules are not fully defined.")
+
+    if any(word in tokens for word in {"ml", "prediction", "predictions", "model", "inference"}):
+        must_clarify.append("Prediction target and expected output are not defined.")
+        should_clarify.append("Input data source for predictions should be defined.")
+        should_clarify.append("Model quality, freshness, or evaluation criteria should be defined.")
 
     if any(word in tokens for word in {"report", "dashboard", "analytics"}):
         should_clarify.append("Reporting dimensions, filters, and freshness expectations should be defined.")
@@ -126,8 +131,24 @@ def _tokens(value: str) -> set[str]:
 
 
 def _mentions_actor(value: str) -> bool:
-    actors = ("user", "admin", "owner", "member", "customer", "developer", "team")
+    actors = ("user", "admin", "owner", "member", "customer", "developer", "team", "player")
     return any(actor in value for actor in actors)
+
+
+def _has_implied_ui_actor(tokens: set[str]) -> bool:
+    ui_terms = {
+        "button",
+        "form",
+        "screen",
+        "page",
+        "field",
+        "filter",
+        "filters",
+        "modal",
+        "menu",
+        "dashboard",
+    }
+    return bool(tokens.intersection(ui_terms))
 
 
 def _mentions_success_condition(value: str) -> bool:

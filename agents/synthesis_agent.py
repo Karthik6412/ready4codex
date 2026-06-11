@@ -19,6 +19,7 @@ class ReadinessReport:
     engineering_risks: list[str]
     architecture_fit: dict[str, object]
     testability_analysis: dict[str, object]
+    repo_health_warnings: list[str]
     suggested_agent_plan: list[dict[str, object]]
     codex_ready_prompt: str
     architecture_summary: dict[str, str]
@@ -55,7 +56,6 @@ async def run_synthesis_agent(
                 "architecture_fit_analysis": analysis.architecture_fit,
                 "pm_agent_output": pm_result,
                 "engineer_agent_output": engineer_result,
-                "deterministic_baseline": fallback_report.to_dict(),
             },
             schema_name="ready4codex_synthesis",
             schema=_synthesis_schema(),
@@ -87,19 +87,28 @@ def synthesize_report(
     engineer_result: dict[str, list[str]],
 ) -> ReadinessReport:
     testability = analyze_testability(feature, pm_result)
-    score = calculate_score(pm_result, engineer_result, testability)
-    verdict = calculate_verdict(score, pm_result, engineer_result, testability)
+    repo_health_warnings = collect_repo_health_warnings(analysis, pm_result, engineer_result)
+    feature_pm_result = feature_specific_pm_result(pm_result)
+    feature_engineer_result = feature_specific_engineer_result(engineer_result)
+    score = calculate_score(feature_pm_result, feature_engineer_result, testability)
+    verdict = calculate_verdict(score, feature_pm_result, feature_engineer_result, testability)
     agent_plan = build_agent_plan(analysis)
-    prompt = build_codex_prompt(feature, analysis, pm_result, engineer_result, testability)
+    prompt = build_codex_prompt(
+        feature,
+        analysis,
+        feature_pm_result,
+        feature_engineer_result,
+        testability,
+    )
 
     product_gaps = (
-        pm_result.get("must_clarify", [])
-        + pm_result.get("should_clarify", [])
+        feature_pm_result.get("must_clarify", [])
+        + feature_pm_result.get("should_clarify", [])
         + pm_result.get("open_questions", [])
     )
     engineering_risks = (
-        engineer_result.get("risks", [])
-        + engineer_result.get("missing_infrastructure", [])
+        feature_engineer_result.get("risks", [])
+        + feature_engineer_result.get("missing_infrastructure", [])
         + engineer_result.get("open_questions", [])
     )
 
@@ -112,6 +121,7 @@ def synthesize_report(
         engineering_risks=_dedupe(engineering_risks),
         architecture_fit=analysis.architecture_fit,
         testability_analysis=testability,
+        repo_health_warnings=repo_health_warnings,
         suggested_agent_plan=agent_plan,
         codex_ready_prompt=prompt,
         architecture_summary=analysis.architecture_summary,
@@ -127,7 +137,79 @@ Use the following skill definition as the governing rubric:
 {skill_contents}
 
 Combine repository analysis, PM review, Engineer review, and testability concerns into a concise readiness report.
+Score this feature request on whether IT is ready to implement. Repo health issues are warnings, not score penalties unless they directly block this specific feature.
+Separate feature readiness from repo health:
+- FEATURE READINESS affects the ARS score: must-clarify items specific to this feature, engineering risks that block this feature, missing infrastructure required for this feature, and poor testability of this feature's requirements.
+- REPO HEALTH appears only in repo_health_warnings and must not reduce the score: general missing tests, no CI/CD, broad architectural gaps unrelated to the feature, and repository hygiene issues.
+A simple, well-scoped feature on an imperfect repo should still score 70-80+ when the request itself is clear.
 Return JSON only. Follow the skill output order. Do not recommend implementation when critical ambiguities remain."""
+
+
+def feature_specific_pm_result(
+    pm_result: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    return {
+        "must_clarify": [
+            item
+            for item in pm_result.get("must_clarify", [])
+            if not _is_repo_health_item(item)
+        ],
+        "should_clarify": [
+            item
+            for item in pm_result.get("should_clarify", [])
+            if not _is_repo_health_item(item)
+        ],
+        "open_questions": pm_result.get("open_questions", []),
+    }
+
+
+def feature_specific_engineer_result(
+    engineer_result: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    return {
+        "risks": [
+            item
+            for item in engineer_result.get("risks", [])
+            if not _is_repo_health_item(item)
+        ],
+        "missing_infrastructure": [
+            item
+            for item in engineer_result.get("missing_infrastructure", [])
+            if not _is_repo_health_item(item)
+        ],
+        "open_questions": engineer_result.get("open_questions", []),
+    }
+
+
+def collect_repo_health_warnings(
+    analysis: RepositoryAnalysis,
+    pm_result: dict[str, list[str]],
+    engineer_result: dict[str, list[str]],
+) -> list[str]:
+    warnings: list[str] = []
+    warnings.extend(analysis.repo_notes)
+
+    if "ci" not in analysis.architecture_summary:
+        warnings.append("No CI/CD workflow detected.")
+
+    ownership_boundaries = analysis.architecture_fit.get("ownership_boundaries", [])
+    if isinstance(ownership_boundaries, list):
+        warnings.extend(
+            str(item)
+            for item in ownership_boundaries
+            if "no clear ownership boundary" in str(item).lower()
+        )
+
+    for item in (
+        pm_result.get("must_clarify", [])
+        + pm_result.get("should_clarify", [])
+        + engineer_result.get("risks", [])
+        + engineer_result.get("missing_infrastructure", [])
+    ):
+        if _is_repo_health_item(item):
+            warnings.append(item.removeprefix("Repository context note: ").strip())
+
+    return _dedupe(warnings)
 
 
 def _synthesis_schema() -> dict[str, object]:
@@ -141,6 +223,7 @@ def _synthesis_schema() -> dict[str, object]:
             "engineering_risks",
             "architecture_fit",
             "testability_analysis",
+            "repo_health_warnings",
             "suggested_agent_plan",
             "codex_ready_prompt",
         ],
@@ -187,6 +270,7 @@ def _synthesis_schema() -> dict[str, object]:
                     },
                 },
             },
+            "repo_health_warnings": {"type": "array", "items": {"type": "string"}},
             "suggested_agent_plan": {
                 "type": "array",
                 "items": {
@@ -224,6 +308,9 @@ def _report_from_openai_result(
         architecture_fit=_coerce_dict(result.get("architecture_fit")) or analysis.architecture_fit,
         testability_analysis=_coerce_dict(result.get("testability_analysis"))
         or fallback.testability_analysis,
+        repo_health_warnings=_coerce_string_list(result.get("repo_health_warnings"))
+        if "repo_health_warnings" in result
+        else fallback.repo_health_warnings,
         suggested_agent_plan=_coerce_agent_plan(result.get("suggested_agent_plan"))
         or fallback.suggested_agent_plan,
         codex_ready_prompt=str(result.get("codex_ready_prompt") or fallback.codex_ready_prompt),
@@ -288,11 +375,21 @@ def calculate_score(
     testability: dict[str, object],
 ) -> int:
     score = 100
+    scored_risks = [
+        risk
+        for risk in engineer_result.get("risks", [])
+        if _is_blocking_engineering_risk(risk)
+    ]
     score -= len(pm_result.get("must_clarify", [])) * 10
-    score -= len(engineer_result.get("risks", [])) * 8
+    score -= len(scored_risks) * 8
     score -= len(engineer_result.get("missing_infrastructure", [])) * 12
     if int(testability.get("testability_score", 0)) < 70:
         score -= 15
+    if any(
+        "no clearly impacted modules" in risk.lower()
+        for risk in engineer_result.get("risks", [])
+    ):
+        score = min(score, 85)
     return max(0, min(100, score))
 
 
@@ -446,6 +543,35 @@ def _coerce_agent_plan(value: object) -> list[dict[str, object]]:
             }
         )
     return plan
+
+
+def _is_repo_health_item(item: str) -> bool:
+    value = str(item).lower()
+    repo_health_phrases = (
+        "repository context note",
+        "no readme",
+        "readme.md detected",
+        "no top-level test",
+        "test directory",
+        "test framework",
+        "tests were not",
+        "no ci",
+        "ci/cd",
+        "github actions",
+        "no readable repository files",
+        "no strong architecture signals",
+        "no clear ownership boundary",
+    )
+    return any(phrase in value for phrase in repo_health_phrases)
+
+
+def _is_blocking_engineering_risk(item: str) -> bool:
+    value = str(item).lower()
+    non_blocking_or_duplicate = (
+        "coordination across multiple modules",
+        "require infrastructure that was not detected",
+    )
+    return not any(phrase in value for phrase in non_blocking_or_duplicate)
 
 
 def _dedupe(items: list[str]) -> list[str]:

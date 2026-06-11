@@ -49,6 +49,9 @@ INFRA_KEYWORDS = {
     "upload": ("file storage", ("s3", "blob", "storage", "upload")),
     "search": ("search index", ("search", "elasticsearch", "opensearch", "meilisearch")),
     "queue": ("background queue", ("queue", "celery", "rq", "worker", "bullmq")),
+    "ml": ("model serving infrastructure", ("ml", "model", "prediction", "inference")),
+    "prediction": ("model serving infrastructure", ("ml", "model", "prediction", "inference")),
+    "predictions": ("model serving infrastructure", ("ml", "model", "prediction", "inference")),
 }
 
 
@@ -136,6 +139,7 @@ def _build_architecture_fit(
     for trigger, (label, evidence_words) in INFRA_KEYWORDS.items():
         if trigger in tokens and not any(word in combined_text for word in evidence_words):
             new_infrastructure.append(label)
+    new_infrastructure = sorted(set(new_infrastructure))
 
     complexity = "low"
     if len(impacted_modules) >= 3 or new_infrastructure:

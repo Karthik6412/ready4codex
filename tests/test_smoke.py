@@ -16,6 +16,44 @@ from repo_analysis import analyze_repository
 from reporting import save_report
 
 
+def _fallback_report_for(feature: str):
+    original_api_key = os.environ.pop("OPENAI_API_KEY", None)
+    snapshot = RepoSnapshot(
+        full_name="demo/app",
+        default_branch="main",
+        description="Demo app",
+        html_url="https://github.com/demo/app",
+        tree_paths=[
+            "README.md",
+            "app/main.py",
+            "requirements.txt",
+        ],
+        files=[
+            RepoFile("README.md", "FastAPI app"),
+            RepoFile("requirements.txt", "fastapi\n"),
+            RepoFile("app/main.py", "from fastapi import FastAPI"),
+        ],
+    )
+    analysis = analyze_repository(snapshot, feature)
+
+    async def run_agents():
+        return await asyncio.gather(
+            run_pm_agent(feature, analysis),
+            run_engineer_agent(feature, analysis),
+        )
+
+    try:
+        pm_run, engineer_run = asyncio.run(run_agents())
+        synthesis_run = asyncio.run(
+            run_synthesis_agent(snapshot, feature, analysis, pm_run.output, engineer_run.output)
+        )
+    finally:
+        if original_api_key is not None:
+            os.environ["OPENAI_API_KEY"] = original_api_key
+
+    return synthesis_run.report
+
+
 def test_smoke_report_generation() -> None:
     original_api_key = os.environ.pop("OPENAI_API_KEY", None)
     snapshot = RepoSnapshot(
@@ -69,6 +107,25 @@ def test_smoke_report_generation() -> None:
     assert report_path.name.endswith(".md")
 
 
+def test_feature_specific_scoring_examples() -> None:
+    reset_report = _fallback_report_for(
+        "Add a reset button that clears selected filters when clicked"
+    )
+    assert 75 <= reset_report.score <= 85
+    assert reset_report.verdict == "READY"
+    assert reset_report.repo_health_warnings
+    assert not any("test framework" in risk.lower() for risk in reset_report.engineering_risks)
+
+    intensity_report = _fallback_report_for("Compare player intensity")
+    assert 50 <= intensity_report.score <= 65
+    assert intensity_report.verdict == "NEEDS WORK"
+
+    ml_report = _fallback_report_for("Add ML predictions")
+    assert 20 <= ml_report.score <= 30
+    assert ml_report.verdict == "NOT READY"
+
+
 if __name__ == "__main__":
     test_smoke_report_generation()
+    test_feature_specific_scoring_examples()
     print("smoke test passed")
