@@ -23,6 +23,12 @@ Reserve must_clarify only for blocking ambiguities that prevent implementation f
 Use should_clarify for edge cases, preferences, reasonable defaults, and non-blocking product polish.
 Ready4Codex answers: "Can an engineer or coding agent reasonably begin implementation?" not "Have all possible future questions been answered?"
 
+Context applicability check:
+- Before flagging any gap, verify it applies to this repository and this feature.
+- If the repo appears to be a simple dashboard/data visualization app with no user accounts, database writes, persistence/save workflow, or editing workflow, do not flag unsaved changes, confirmation dialogs, save/discard behavior, or data persistence behavior as blockers.
+- For simple UI features, must_clarify should usually be empty when the target UI area is named, the core behavior is specified, and default/reset behavior is specified.
+- Do not put animations, alerts, visual feedback, accessibility, disabled states, or confirmation dialogs in must_clarify. At most, put directly relevant UX polish in should_clarify.
+
 Be specific and concise.
 
 Return JSON only."""
@@ -49,7 +55,7 @@ async def run_pm_agent(feature: str, analysis: RepositoryAnalysis) -> AgentResul
                 ["must_clarify", "should_clarify", "open_questions"]
             ),
         )
-        return AgentResult(output=_normalize_pm_result(result), mode="OpenAI mode")
+        return AgentResult(output=_normalize_pm_result(result, feature, analysis), mode="OpenAI mode")
     except Exception as exc:
         if not isinstance(exc, OpenAIUnavailable):
             error = str(exc)
@@ -105,7 +111,7 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
         must_clarify.append("Input data source for predictions is not defined.")
         should_clarify.append("Model quality, freshness, or evaluation criteria should be defined.")
 
-    if any(word in tokens for word in {"report", "dashboard", "analytics"}):
+    if any(word in tokens for word in {"report", "analytics"}):
         should_clarify.append("Reporting dimensions, filters, and freshness expectations should be defined.")
 
     if analysis.repo_notes:
@@ -121,10 +127,24 @@ async def _run_pm_fallback(feature: str, analysis: RepositoryAnalysis) -> dict[s
     }
 
 
-def _normalize_pm_result(result: dict[str, object]) -> dict[str, list[str]]:
+def _normalize_pm_result(
+    result: dict[str, object], feature: str, analysis: RepositoryAnalysis
+) -> dict[str, list[str]]:
+    must_clarify: list[str] = []
+    should_clarify = _coerce_string_list(result.get("should_clarify"))
+
+    for item in _coerce_string_list(result.get("must_clarify")):
+        if _is_non_blocking_product_gap(item) or _is_inapplicable_persistence_gap(
+            item, feature, analysis
+        ):
+            if _is_directly_relevant_polish(item, feature):
+                should_clarify.append(item)
+            continue
+        must_clarify.append(item)
+
     return {
-        "must_clarify": _coerce_string_list(result.get("must_clarify")),
-        "should_clarify": _coerce_string_list(result.get("should_clarify")),
+        "must_clarify": _dedupe(must_clarify),
+        "should_clarify": _dedupe(should_clarify),
         "open_questions": _coerce_string_list(result.get("open_questions")),
     }
 
@@ -196,6 +216,73 @@ def _has_objective_behavior(tokens: set[str]) -> bool:
         "filters",
     }
     return bool(tokens.intersection(ui_terms))
+
+
+def _is_non_blocking_product_gap(item: str) -> bool:
+    value = item.lower()
+    non_blocking_terms = (
+        "animation",
+        "animations",
+        "alert",
+        "alerts",
+        "visual feedback",
+        "accessibility",
+        "disabled state",
+        "disabled states",
+        "confirmation dialog",
+        "confirmation dialogs",
+        "confirm dialog",
+        "toast",
+        "loading state",
+        "hover",
+        "focus state",
+    )
+    return any(term in value for term in non_blocking_terms)
+
+
+def _is_inapplicable_persistence_gap(
+    item: str, feature: str, analysis: RepositoryAnalysis
+) -> bool:
+    value = item.lower()
+    persistence_terms = (
+        "unsaved",
+        "save",
+        "discard",
+        "persistence",
+        "persist",
+        "stored",
+        "database",
+        "data loss",
+    )
+    if not any(term in value for term in persistence_terms):
+        return False
+    return _is_simple_dashboard_ui_feature(feature) and not _repo_has_persistence_signals(analysis)
+
+
+def _is_directly_relevant_polish(item: str, feature: str) -> bool:
+    value = item.lower()
+    feature_tokens = _tokens(feature.lower())
+    if "disabled" in value and feature_tokens.intersection({"button", "buttons"}):
+        return True
+    if "accessibility" in value and feature_tokens.intersection({"button", "form", "slider"}):
+        return True
+    return False
+
+
+def _is_simple_dashboard_ui_feature(feature: str) -> bool:
+    tokens = _tokens(feature.lower())
+    return bool(tokens.intersection({"dashboard", "chart", "filters", "filter", "slider"})) and bool(
+        tokens.intersection({"button", "reset", "clear", "toggle", "display", "show"})
+    )
+
+
+def _repo_has_persistence_signals(analysis: RepositoryAnalysis) -> bool:
+    summary_text = " ".join(str(value).lower() for value in analysis.architecture_summary.values())
+    fit_text = " ".join(
+        str(value).lower() for value in analysis.architecture_fit.get("new_infrastructure_required", [])
+    )
+    persistence_terms = ("postgres", "mysql", "sqlite", "mongodb", "database", "storage")
+    return any(term in summary_text or term in fit_text for term in persistence_terms)
 
 
 def _mentions_success_condition(value: str) -> bool:

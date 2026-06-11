@@ -116,6 +116,18 @@ def test_feature_specific_scoring_examples() -> None:
     assert reset_report.repo_health_warnings
     assert not any("test framework" in risk.lower() for risk in reset_report.engineering_risks)
 
+    dashboard_reset_report = _fallback_report_for(
+        "Add a reset button to the dashboard that clears all filters and returns the phase slider to default position 0-90"
+    )
+    assert 75 <= dashboard_reset_report.score <= 90
+    assert dashboard_reset_report.verdict == "READY"
+    assert dashboard_reset_report.testability_analysis["testability_score"] >= 70
+    false_positive_terms = ("unsaved", "animation", "alert", "accessibility", "confirmation")
+    blocker_text = " ".join(
+        dashboard_reset_report.product_gaps + dashboard_reset_report.engineering_risks
+    ).lower()
+    assert not any(term in blocker_text for term in false_positive_terms)
+
     intensity_report = _fallback_report_for("Compare player intensity")
     assert 50 <= intensity_report.score <= 65
     assert intensity_report.verdict == "NEEDS WORK"

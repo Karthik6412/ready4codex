@@ -90,7 +90,12 @@ def synthesize_report(
     repo_health_warnings = collect_repo_health_warnings(analysis, pm_result, engineer_result)
     feature_pm_result = feature_specific_pm_result(pm_result)
     feature_engineer_result = feature_specific_engineer_result(engineer_result)
-    score = calculate_score(feature_pm_result, feature_engineer_result, testability)
+    score = calculate_score(
+        feature_pm_result,
+        feature_engineer_result,
+        testability,
+        analysis.architecture_fit,
+    )
     verdict = calculate_verdict(score, feature_pm_result, feature_engineer_result, testability)
     agent_plan = build_agent_plan(analysis)
     prompt = build_codex_prompt(
@@ -143,6 +148,10 @@ Separate feature readiness from repo health:
 A simple, well-scoped feature on an imperfect repo should still score 70-80+ when the request itself is clear.
 Distinguish blocking issues from non-blocking improvements. Readiness scoring should primarily reflect implementation readiness, not perfection.
 Ready4Codex answers: "Can an engineer or coding agent reasonably begin implementation?" not "Have all possible future questions been answered?"
+Context applicability check:
+- If the repo appears to be a simple dashboard/data visualization app with no user accounts, database writes, persistence/save workflow, or editing workflow, do not treat unsaved changes, confirmation dialogs, save/discard behavior, or data persistence behavior as blockers.
+- Animations, alerts, visual feedback, accessibility, disabled states, and confirmation dialogs are non-blocking UX polish unless explicitly requested.
+- If implementation_complexity is low, new_infrastructure_required is empty, must_clarify is empty, and there are no blocking engineering risks, the ARS must be at least 75.
 Return JSON only. Follow the skill output order. Do not recommend implementation when critical ambiguities remain."""
 
 
@@ -298,17 +307,42 @@ def _report_from_openai_result(
     analysis: RepositoryAnalysis,
     fallback: ReadinessReport,
 ) -> ReadinessReport:
+    architecture_fit = _coerce_dict(result.get("architecture_fit")) or analysis.architecture_fit
+    product_gaps = _coerce_string_list(result.get("product_gaps")) or fallback.product_gaps
+    engineering_risks = _coerce_string_list(result.get("engineering_risks")) or fallback.engineering_risks
+    testability_analysis = (
+        _coerce_dict(result.get("testability_analysis")) or fallback.testability_analysis
+    )
+    blocking_product_gaps = [
+        item for item in product_gaps if not _is_non_blocking_synthesis_item(item)
+    ]
+    blocking_engineering_risks = [
+        item for item in engineering_risks if _is_blocking_engineering_risk(item)
+    ]
+    score = _coerce_score(result.get("score"), fallback.score)
+    if _should_apply_readiness_floor(
+        architecture_fit,
+        {"must_clarify": blocking_product_gaps},
+        {"risks": blocking_engineering_risks, "missing_infrastructure": []},
+        blocking_engineering_risks,
+    ):
+        score = max(score, 75)
+    verdict = calculate_verdict(
+        score,
+        {"must_clarify": blocking_product_gaps},
+        {"risks": blocking_engineering_risks, "missing_infrastructure": []},
+        testability_analysis,
+    )
+
     return ReadinessReport(
         repository=snapshot.full_name,
         feature=feature,
-        score=_coerce_score(result.get("score"), fallback.score),
-        verdict=_coerce_verdict(result.get("verdict"), fallback.verdict),
-        product_gaps=_coerce_string_list(result.get("product_gaps")) or fallback.product_gaps,
-        engineering_risks=_coerce_string_list(result.get("engineering_risks"))
-        or fallback.engineering_risks,
-        architecture_fit=_coerce_dict(result.get("architecture_fit")) or analysis.architecture_fit,
-        testability_analysis=_coerce_dict(result.get("testability_analysis"))
-        or fallback.testability_analysis,
+        score=score,
+        verdict=verdict,
+        product_gaps=product_gaps,
+        engineering_risks=engineering_risks,
+        architecture_fit=architecture_fit,
+        testability_analysis=testability_analysis,
         repo_health_warnings=_coerce_string_list(result.get("repo_health_warnings"))
         if "repo_health_warnings" in result
         else fallback.repo_health_warnings,
@@ -375,6 +409,7 @@ def calculate_score(
     pm_result: dict[str, list[str]],
     engineer_result: dict[str, list[str]],
     testability: dict[str, object],
+    architecture_fit: dict[str, object] | None = None,
 ) -> int:
     score = 100
     scored_risks = [
@@ -400,6 +435,13 @@ def calculate_score(
         and any("module should own" in question.lower() for question in engineer_result.get("open_questions", []))
     ):
         score = min(score, 90)
+    if _should_apply_readiness_floor(
+        architecture_fit or {},
+        pm_result,
+        engineer_result,
+        scored_risks,
+    ):
+        score = max(score, 75)
     return max(0, min(100, score))
 
 
@@ -611,8 +653,68 @@ def _is_blocking_engineering_risk(item: str) -> bool:
     non_blocking_or_duplicate = (
         "coordination across multiple modules",
         "require infrastructure that was not detected",
+        "animation",
+        "animations",
+        "alert",
+        "alerts",
+        "visual feedback",
+        "accessibility",
+        "disabled state",
+        "disabled states",
+        "confirmation dialog",
+        "confirmation dialogs",
+        "unsaved",
+        "save/discard",
+        "save discard",
+        "persistence",
     )
     return not any(phrase in value for phrase in non_blocking_or_duplicate)
+
+
+def _is_non_blocking_synthesis_item(item: str) -> bool:
+    value = str(item).lower()
+    non_blocking_terms = (
+        "animation",
+        "animations",
+        "alert",
+        "alerts",
+        "visual feedback",
+        "accessibility",
+        "disabled state",
+        "disabled states",
+        "confirmation dialog",
+        "confirmation dialogs",
+        "unsaved",
+        "save/discard",
+        "save discard",
+        "persistence",
+        "persist",
+        "toast",
+        "loading state",
+        "hover",
+        "focus state",
+        "optional",
+        "polish",
+    )
+    return any(term in value for term in non_blocking_terms)
+
+
+def _should_apply_readiness_floor(
+    architecture_fit: dict[str, object],
+    pm_result: dict[str, list[str]],
+    engineer_result: dict[str, list[str]],
+    scored_risks: list[str],
+) -> bool:
+    infrastructure = architecture_fit.get("new_infrastructure_required", [])
+    if infrastructure is None:
+        infrastructure = []
+    return (
+        str(architecture_fit.get("implementation_complexity", "")).lower() == "low"
+        and not infrastructure
+        and not pm_result.get("must_clarify")
+        and not scored_risks
+        and not engineer_result.get("missing_infrastructure")
+    )
 
 
 def _dedupe(items: list[str]) -> list[str]:

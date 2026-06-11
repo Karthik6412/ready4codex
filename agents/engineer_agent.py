@@ -22,6 +22,9 @@ Only flag risks directly relevant to implementing the requested feature.
 Do not treat optional UX improvements, future scalability concerns, or hypothetical edge cases as blocking risks.
 Put non-blocking enhancement suggestions or follow-up considerations in open_questions, not risks.
 Do not include general repo health issues as implementation risks unless they directly block this feature.
+Context applicability check:
+- If the repo appears to be a simple dashboard/data visualization app with no user accounts, database writes, persistence/save workflow, or editing workflow, do not flag unsaved changes, confirmation dialogs, save/discard behavior, or data persistence behavior as implementation risks.
+- Animations, alerts, visual feedback, accessibility, disabled states, and confirmation dialogs are UX polish unless the feature explicitly asks for them.
 
 Return JSON only."""
 
@@ -47,7 +50,10 @@ async def run_engineer_agent(feature: str, analysis: RepositoryAnalysis) -> Agen
                 ["risks", "missing_infrastructure", "open_questions"]
             ),
         )
-        return AgentResult(output=_normalize_engineer_result(result), mode="OpenAI mode")
+        return AgentResult(
+            output=_normalize_engineer_result(result, feature, analysis),
+            mode="OpenAI mode",
+        )
     except Exception as exc:
         if not isinstance(exc, OpenAIUnavailable):
             error = str(exc)
@@ -113,11 +119,25 @@ async def _run_engineer_fallback(
     }
 
 
-def _normalize_engineer_result(result: dict[str, object]) -> dict[str, list[str]]:
+def _normalize_engineer_result(
+    result: dict[str, object], feature: str, analysis: RepositoryAnalysis
+) -> dict[str, list[str]]:
+    risks: list[str] = []
+    open_questions = _coerce_string_list(result.get("open_questions"))
+
+    for item in _coerce_string_list(result.get("risks")):
+        if _is_non_blocking_engineering_item(item) or _is_inapplicable_persistence_item(
+            item, feature, analysis
+        ):
+            if _is_directly_relevant_followup(item, feature):
+                open_questions.append(item)
+            continue
+        risks.append(item)
+
     return {
-        "risks": _coerce_string_list(result.get("risks")),
+        "risks": _dedupe(risks),
         "missing_infrastructure": _coerce_string_list(result.get("missing_infrastructure")),
-        "open_questions": _coerce_string_list(result.get("open_questions")),
+        "open_questions": _dedupe(open_questions),
     }
 
 
@@ -135,3 +155,76 @@ def _dedupe(items: list[str]) -> list[str]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _tokens(value: str) -> set[str]:
+    return set(re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", value.lower()))
+
+
+def _is_non_blocking_engineering_item(item: str) -> bool:
+    value = item.lower()
+    non_blocking_terms = (
+        "animation",
+        "animations",
+        "alert",
+        "alerts",
+        "visual feedback",
+        "accessibility",
+        "disabled state",
+        "disabled states",
+        "confirmation dialog",
+        "confirmation dialogs",
+        "confirm dialog",
+        "toast",
+        "loading state",
+        "hover",
+        "focus state",
+        "future scalability",
+        "optional ux",
+    )
+    return any(term in value for term in non_blocking_terms)
+
+
+def _is_inapplicable_persistence_item(
+    item: str, feature: str, analysis: RepositoryAnalysis
+) -> bool:
+    value = item.lower()
+    persistence_terms = (
+        "unsaved",
+        "save",
+        "discard",
+        "persistence",
+        "persist",
+        "stored",
+        "database",
+        "data loss",
+    )
+    if not any(term in value for term in persistence_terms):
+        return False
+    return _is_simple_dashboard_ui_feature(feature) and not _repo_has_persistence_signals(analysis)
+
+
+def _is_directly_relevant_followup(item: str, feature: str) -> bool:
+    value = item.lower()
+    feature_tokens = _tokens(feature)
+    if "disabled" in value and feature_tokens.intersection({"button", "buttons"}):
+        return True
+    if "accessibility" in value and feature_tokens.intersection({"button", "form", "slider"}):
+        return True
+    return False
+
+
+def _is_simple_dashboard_ui_feature(feature: str) -> bool:
+    tokens = _tokens(feature)
+    return bool(tokens.intersection({"dashboard", "chart", "filters", "filter", "slider"})) and bool(
+        tokens.intersection({"button", "reset", "clear", "toggle", "display", "show"})
+    )
+
+
+def _repo_has_persistence_signals(analysis: RepositoryAnalysis) -> bool:
+    summary_text = " ".join(str(value).lower() for value in analysis.architecture_summary.values())
+    fit_text = " ".join(
+        str(value).lower() for value in analysis.architecture_fit.get("new_infrastructure_required", [])
+    )
+    persistence_terms = ("postgres", "mysql", "sqlite", "mongodb", "database", "storage")
+    return any(term in summary_text or term in fit_text for term in persistence_terms)
